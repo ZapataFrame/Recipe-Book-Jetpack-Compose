@@ -11,6 +11,8 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Z_U1_76129_E_02">
+<!--        <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />-->
+<!--        <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />-->
         <activity
             android:name=".MainActivity"
             android:exported="true"

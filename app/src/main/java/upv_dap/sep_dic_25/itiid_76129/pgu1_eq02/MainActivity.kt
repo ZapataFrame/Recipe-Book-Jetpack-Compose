@@ -1,9 +1,16 @@
 package upv_dap.sep_dic_25.itiid_76129.pgu1_eq02
 import upv_dap.sep_dic_25.itiid_76129.pgu1_eq02.ui.theme.Z_U1_76129_E_02Theme
 
+import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -15,10 +22,16 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -26,6 +39,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import coil.compose.rememberAsyncImagePainter
+import coil.request.ImageRequest
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -35,16 +50,33 @@ data class Recipe(
     val category: String,
     val ingredients: List<String>,
     val steps: List<String>,
+    val imageUri: Uri? = null,
     val dateCreated: String = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()),
     val isFavorite: Boolean = false
 )
 
 class MainActivity : ComponentActivity() {
+
+    private val selectedImageUri = mutableStateOf<Uri?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val imagePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+            if (uri != null) {
+                selectedImageUri.value = uri
+            } else {
+                Toast.makeText(this, "No image selected", Toast.LENGTH_SHORT).show()
+            }
+        }
+
         setContent {
             Z_U1_76129_E_02Theme {
-                RecipeBookApp()
+                RecipeBookApp(
+                    selectedImageUri = selectedImageUri.value,
+                    onImageSelect = { imagePickerLauncher.launch("image/*") },
+                    onImageClear = { selectedImageUri.value = null }
+                )
             }
         }
     }
@@ -52,7 +84,11 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RecipeBookApp() {
+fun RecipeBookApp(
+    selectedImageUri: Uri?,
+    onImageSelect: () -> Unit,
+    onImageClear: () -> Unit
+) {
     val navController = rememberNavController()
 
     // Estado simple para las recetas - empezamos con lista vacía
@@ -154,11 +190,18 @@ fun RecipeBookApp() {
 
             composable("add") {
                 AddRecipeScreen(
+                    selectedImageUri = selectedImageUri,
+                    onImageSelect = onImageSelect,
+                    onImageClear = onImageClear,
                     onRecipeAdded = { recipe ->
                         recipes = recipes + recipe
+                        onImageClear() // Limpiar imagen después de agregar
                         navController.navigateUp()
                     },
-                    onCancel = { navController.navigateUp() }
+                    onCancel = {
+                        onImageClear() // Limpiar imagen al cancelar
+                        navController.navigateUp()
+                    }
                 )
             }
 
@@ -187,6 +230,9 @@ fun RecipeBookApp() {
                 if (recipe != null) {
                     RecipeDetailScreen(
                         recipe = recipe,
+                        selectedImageUri = selectedImageUri,
+                        onImageSelect = onImageSelect,
+                        onImageClear = onImageClear,
                         onToggleFavorite = { updatedRecipe ->
                             recipes = recipes.map {
                                 if (it.id == updatedRecipe.id) updatedRecipe else it
@@ -194,12 +240,14 @@ fun RecipeBookApp() {
                         },
                         onDeleteRecipe = {
                             recipes = recipes.filter { it.id != recipe.id }
+                            onImageClear() // Limpiar imagen al eliminar
                             navController.navigateUp()
                         },
                         onEditRecipe = { updatedRecipe ->
                             recipes = recipes.map {
                                 if (it.id == updatedRecipe.id) updatedRecipe else it
                             }
+                            onImageClear() // Limpiar imagen después de editar
                         }
                     )
                 } else {
@@ -408,6 +456,9 @@ fun StatItem(label: String, value: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddRecipeScreen(
+    selectedImageUri: Uri?,
+    onImageSelect: () -> Unit,
+    onImageClear: () -> Unit,
     onRecipeAdded: (Recipe) -> Unit,
     onCancel: () -> Unit
 ) {
@@ -467,6 +518,113 @@ fun AddRecipeScreen(
             }
         }
 
+        // Sección de imagen
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Recipe Image",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    if (selectedImageUri != null) {
+                        // Mostrar imagen seleccionada
+                        Image(
+                            painter = rememberAsyncImagePainter(
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(selectedImageUri)
+                                    .crossfade(true)
+                                    .build()
+                            ),
+                            contentDescription = "Selected recipe image",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(200.dp)
+                                .clip(RoundedCornerShape(12.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = onImageSelect,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Edit, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Change Image")
+                            }
+
+                            OutlinedButton(
+                                onClick = onImageClear,
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color.Red
+                                )
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Remove")
+                            }
+                        }
+                    } else {
+                        // Mostrar botón para seleccionar imagen
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(200.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickableWithoutRipple { onImageSelect() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(48.dp),
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "Tap to add image",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Button(
+                            onClick = onImageSelect,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Select Image")
+                        }
+                    }
+                }
+            }
+        }
+
         item {
             OutlinedTextField(
                 value = ingredients,
@@ -513,7 +671,8 @@ fun AddRecipeScreen(
                                 title = title.trim(),
                                 category = category,
                                 ingredients = ingredients.split("\n").filter { it.isNotBlank() },
-                                steps = steps.split("\n").filter { it.isNotBlank() }
+                                steps = steps.split("\n").filter { it.isNotBlank() },
+                                imageUri = selectedImageUri
                             )
                             onRecipeAdded(recipe)
                         }
@@ -655,6 +814,9 @@ fun FavoritesScreen(
 @Composable
 fun RecipeDetailScreen(
     recipe: Recipe,
+    selectedImageUri: Uri?,
+    onImageSelect: () -> Unit,
+    onImageClear: () -> Unit,
     onToggleFavorite: (Recipe) -> Unit,
     onDeleteRecipe: () -> Unit,
     onEditRecipe: (Recipe) -> Unit
@@ -666,6 +828,17 @@ fun RecipeDetailScreen(
     var editCategory by remember { mutableStateOf(recipe.category) }
     var editIngredients by remember { mutableStateOf(recipe.ingredients.joinToString("\n")) }
     var editSteps by remember { mutableStateOf(recipe.steps.joinToString("\n")) }
+
+    // Estado para manejar si queremos cambiar la imagen durante la edición
+    var editImageUri by remember { mutableStateOf<Uri?>(null) }
+    var hasImageChanged by remember { mutableStateOf(false) }
+
+    // Efecto para detectar cambios en selectedImageUri durante la edición
+    LaunchedEffect(selectedImageUri) {
+        if (isEditing && selectedImageUri != null && hasImageChanged) {
+            editImageUri = selectedImageUri
+        }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -701,6 +874,28 @@ fun RecipeDetailScreen(
 
         if (!isEditing) {
             // Display mode
+
+            // Imagen de la receta (si existe)
+            if (recipe.imageUri != null) {
+                item {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Image(
+                            painter = rememberAsyncImagePainter(
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(recipe.imageUri)
+                                    .crossfade(true)
+                                    .build()
+                            ),
+                            contentDescription = "Recipe image",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(250.dp),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                }
+            }
+
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -801,6 +996,129 @@ fun RecipeDetailScreen(
                 )
             }
 
+            // Sección de edición de imagen
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Recipe Image",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Determinar qué imagen mostrar
+                        val displayImageUri = if (hasImageChanged) selectedImageUri else recipe.imageUri
+
+                        if (displayImageUri != null) {
+                            // Mostrar imagen actual o nueva
+                            Image(
+                                painter = rememberAsyncImagePainter(
+                                    model = ImageRequest.Builder(LocalContext.current)
+                                        .data(displayImageUri)
+                                        .crossfade(true)
+                                        .build()
+                                ),
+                                contentDescription = "Recipe image",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(200.dp)
+                                    .clip(RoundedCornerShape(12.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        hasImageChanged = true
+                                        onImageSelect()
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.Edit, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Change")
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        hasImageChanged = true
+                                        editImageUri = null
+                                        onImageClear()
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = Color.Red
+                                    )
+                                ) {
+                                    Icon(Icons.Default.Delete, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Remove")
+                                }
+                            }
+                        } else {
+                            // Mostrar área para seleccionar imagen
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(200.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickableWithoutRipple {
+                                        hasImageChanged = true
+                                        onImageSelect()
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Icon(
+                                        Icons.Default.Add,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(48.dp),
+                                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "Tap to add image",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Button(
+                                onClick = {
+                                    hasImageChanged = true
+                                    onImageSelect()
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Add Image")
+                            }
+                        }
+                    }
+                }
+            }
+
             item {
                 OutlinedTextField(
                     value = editIngredients,
@@ -838,6 +1156,9 @@ fun RecipeDetailScreen(
                             editCategory = recipe.category
                             editIngredients = recipe.ingredients.joinToString("\n")
                             editSteps = recipe.steps.joinToString("\n")
+                            editImageUri = null
+                            hasImageChanged = false
+                            onImageClear() // Limpiar imagen temporal
                         },
                         modifier = Modifier.weight(1f)
                     ) {
@@ -846,12 +1167,23 @@ fun RecipeDetailScreen(
 
                     Button(
                         onClick = {
+                            val finalImageUri = if (hasImageChanged) {
+                                selectedImageUri
+                            } else {
+                                recipe.imageUri
+                            }
+
                             val updatedRecipe = recipe.copy(
                                 title = editTitle,
                                 category = editCategory,
                                 ingredients = editIngredients.split("\n").filter { it.isNotBlank() },
                                 steps = editSteps.split("\n").filter { it.isNotBlank() },
+                                imageUri = finalImageUri
                             )
+                            onEditRecipe(updatedRecipe)
+                            isEditing = false
+                            editImageUri = null
+                            hasImageChanged = false
                             onEditRecipe(updatedRecipe)
                             isEditing = false
                         },
@@ -890,6 +1222,16 @@ fun RecipeDetailScreen(
     }
 }
 
+// Función helper para clicks sin ripple
+fun Modifier.clickableWithoutRipple(onClick: () -> Unit): Modifier = composed {
+    clickable(
+        indication = null,
+        interactionSource = remember { MutableInteractionSource() }
+    ) {
+        onClick()
+    }
+}
+
 @Composable
 fun RecipeCard(
     recipe: Recipe,
@@ -903,54 +1245,72 @@ fun RecipeCard(
         onClick = onClick,
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
+        Column {
+            // Imagen de la receta (si existe)
+            if (recipe.imageUri != null) {
+                Image(
+                    painter = rememberAsyncImagePainter(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(recipe.imageUri)
+                            .crossfade(true)
+                            .build()
+                    ),
+                    contentDescription = "Recipe image",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp),
+                    contentScale = ContentScale.Crop
+                )
+            }
+
+            Column(
+                modifier = Modifier.padding(16.dp)
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = recipe.title,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    Badge(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer
-                    ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = recipe.category,
-                            style = MaterialTheme.typography.labelSmall
+                            text = recipe.title,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Badge(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        ) {
+                            Text(
+                                text = recipe.category,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+
+                    if (recipe.isFavorite) {
+                        Icon(
+                            Icons.Default.Favorite,
+                            contentDescription = "Favorite",
+                            tint = Color.Red,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
 
-                if (recipe.isFavorite) {
-                    Icon(
-                        Icons.Default.Favorite,
-                        contentDescription = "Favorite",
-                        tint = Color.Red,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "${recipe.ingredients.size} ingredients • ${recipe.steps.size} steps",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = "${recipe.ingredients.size} ingredients • ${recipe.steps.size} steps",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            )
         }
     }
 }
+
