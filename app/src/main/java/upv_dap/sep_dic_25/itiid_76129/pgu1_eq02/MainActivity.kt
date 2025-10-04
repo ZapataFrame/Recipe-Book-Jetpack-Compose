@@ -1,4 +1,6 @@
 package upv_dap.sep_dic_25.itiid_76129.pgu1_eq02
+import upv_dap.sep_dic_25.itiid_76129.pgu1_eq02.ui.theme.Z_U1_76129_E_02Theme
+
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -8,6 +10,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -15,31 +19,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import upv_dap.sep_dic_25.itiid_76129.pgu1_eq02.ui.theme.Z_U1_76129_E_02Theme
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
-@Serializable
 data class Recipe(
     val id: String = UUID.randomUUID().toString(),
     val title: String,
     val category: String,
     val ingredients: List<String>,
     val steps: List<String>,
-    val prepTime: String,
-    val servings: String,
-    val imageUrl: String = "",
     val dateCreated: String = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()),
     val isFavorite: Boolean = false
 )
@@ -59,34 +54,24 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun RecipeBookApp() {
     val navController = rememberNavController()
-    val context = LocalContext.current
-    val recipesFile = File(context.filesDir, "recipes.json")
 
-    var recipes by remember { mutableStateOf(loadRecipes(recipesFile)) }
-    var currentScreen by remember { mutableStateOf("home") }
+    // Estado simple para las recetas - empezamos con lista vacía
+    var recipes by remember { mutableStateOf(emptyList<Recipe>()) }
 
-    // Función para guardar recetas
-    val saveRecipes = { recipeList: List<Recipe> ->
-        try {
-            val json = Json.encodeToString(recipeList)
-            recipesFile.writeText(json)
-            recipes = recipeList
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route ?: "home"
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Text(
-                        text = when(currentScreen) {
-                            "home" -> "Recipe Book"
-                            "add" -> "Add Recipe"
-                            "recipes" -> "All Recipes"
-                            "favorites" -> "Favorites"
-                            "detail" -> "Recipe Detail"
+                        text = when {
+                            currentRoute == "home" -> "Recipe Book"
+                            currentRoute == "add" -> "Add Recipe"
+                            currentRoute == "recipes" -> "All Recipes"
+                            currentRoute == "favorites" -> "Favorites"
+                            currentRoute.startsWith("detail") -> "Recipe Detail"
                             else -> "Recipe Book"
                         }
                     )
@@ -96,10 +81,10 @@ fun RecipeBookApp() {
                     titleContentColor = MaterialTheme.colorScheme.onPrimary
                 ),
                 navigationIcon = {
-                    if (currentScreen != "home") {
+                    if (currentRoute != "home") {
                         IconButton(onClick = { navController.navigateUp() }) {
                             Icon(
-                                Icons.Default.ArrowBack,
+                                Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = "Back",
                                 tint = MaterialTheme.colorScheme.onPrimary
                             )
@@ -113,9 +98,8 @@ fun RecipeBookApp() {
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Home, contentDescription = null) },
                     label = { Text("Home") },
-                    selected = currentScreen == "home",
+                    selected = currentRoute == "home",
                     onClick = {
-                        currentScreen = "home"
                         navController.navigate("home") {
                             popUpTo("home") { inclusive = true }
                         }
@@ -124,28 +108,31 @@ fun RecipeBookApp() {
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Add, contentDescription = null) },
                     label = { Text("Add") },
-                    selected = currentScreen == "add",
+                    selected = currentRoute == "add",
                     onClick = {
-                        currentScreen = "add"
-                        navController.navigate("add")
+                        navController.navigate("add") {
+                            launchSingleTop = true
+                        }
                     }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.List, contentDescription = null) },
+                    icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null) },
                     label = { Text("Recipes") },
-                    selected = currentScreen == "recipes",
+                    selected = currentRoute == "recipes",
                     onClick = {
-                        currentScreen = "recipes"
-                        navController.navigate("recipes")
+                        navController.navigate("recipes") {
+                            launchSingleTop = true
+                        }
                     }
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Favorite, contentDescription = null) },
                     label = { Text("Favorites") },
-                    selected = currentScreen == "favorites",
+                    selected = currentRoute == "favorites",
                     onClick = {
-                        currentScreen = "favorites"
-                        navController.navigate("favorites")
+                        navController.navigate("favorites") {
+                            launchSingleTop = true
+                        }
                     }
                 )
             }
@@ -157,22 +144,18 @@ fun RecipeBookApp() {
             modifier = Modifier.padding(innerPadding)
         ) {
             composable("home") {
-                currentScreen = "home"
                 HomeScreen(
                     recipes = recipes,
                     onRecipeClick = { recipe ->
-                        currentScreen = "detail"
                         navController.navigate("detail/${recipe.id}")
                     }
                 )
             }
 
             composable("add") {
-                currentScreen = "add"
                 AddRecipeScreen(
                     onRecipeAdded = { recipe ->
-                        val updatedRecipes = recipes + recipe
-                        saveRecipes(updatedRecipes)
+                        recipes = recipes + recipe
                         navController.navigateUp()
                     },
                     onCancel = { navController.navigateUp() }
@@ -180,29 +163,24 @@ fun RecipeBookApp() {
             }
 
             composable("recipes") {
-                currentScreen = "recipes"
                 RecipeListScreen(
                     recipes = recipes,
                     onRecipeClick = { recipe ->
-                        currentScreen = "detail"
                         navController.navigate("detail/${recipe.id}")
                     }
                 )
             }
 
             composable("favorites") {
-                currentScreen = "favorites"
                 FavoritesScreen(
                     favoriteRecipes = recipes.filter { it.isFavorite },
                     onRecipeClick = { recipe ->
-                        currentScreen = "detail"
                         navController.navigate("detail/${recipe.id}")
                     }
                 )
             }
 
             composable("detail/{recipeId}") { backStackEntry ->
-                currentScreen = "detail"
                 val recipeId = backStackEntry.arguments?.getString("recipeId")
                 val recipe = recipes.find { it.id == recipeId }
 
@@ -210,23 +188,27 @@ fun RecipeBookApp() {
                     RecipeDetailScreen(
                         recipe = recipe,
                         onToggleFavorite = { updatedRecipe ->
-                            val updatedRecipes = recipes.map {
+                            recipes = recipes.map {
                                 if (it.id == updatedRecipe.id) updatedRecipe else it
                             }
-                            saveRecipes(updatedRecipes)
                         },
                         onDeleteRecipe = {
-                            val updatedRecipes = recipes.filter { it.id != recipe.id }
-                            saveRecipes(updatedRecipes)
+                            recipes = recipes.filter { it.id != recipe.id }
                             navController.navigateUp()
                         },
                         onEditRecipe = { updatedRecipe ->
-                            val updatedRecipes = recipes.map {
+                            recipes = recipes.map {
                                 if (it.id == updatedRecipe.id) updatedRecipe else it
                             }
-                            saveRecipes(updatedRecipes)
                         }
                     )
+                } else {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("Recipe not found")
+                    }
                 }
             }
         }
@@ -240,12 +222,18 @@ fun HomeScreen(
 ) {
     var searchText by remember { mutableStateOf("") }
 
-    val recentRecipes = recipes.sortedByDescending { it.dateCreated }.take(5)
-    val favoriteRecipes = recipes.filter { it.isFavorite }.take(3)
-    val filteredRecipes = recipes.filter {
-        it.title.contains(searchText, ignoreCase = true) ||
-                it.category.contains(searchText, ignoreCase = true) ||
-                it.ingredients.any { ingredient -> ingredient.contains(searchText, ignoreCase = true) }
+    val recentRecipes = remember(recipes) {
+        recipes.sortedByDescending { it.dateCreated }.take(5)
+    }
+    val favoriteRecipes = remember(recipes) {
+        recipes.filter { it.isFavorite }.take(3)
+    }
+    val filteredRecipes = remember(recipes, searchText) {
+        recipes.filter {
+            it.title.contains(searchText, ignoreCase = true) ||
+                    it.category.contains(searchText, ignoreCase = true) ||
+                    it.ingredients.any { ingredient -> ingredient.contains(searchText, ignoreCase = true) }
+        }
     }
 
     LazyColumn(
@@ -309,7 +297,7 @@ fun HomeScreen(
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(recentRecipes) { recipe ->
+                        items(recentRecipes, key = { it.id }) { recipe ->
                             RecipeCard(
                                 recipe = recipe,
                                 onClick = { onRecipeClick(recipe) },
@@ -333,11 +321,48 @@ fun HomeScreen(
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(favoriteRecipes) { recipe ->
+                        items(favoriteRecipes, key = { it.id }) { recipe ->
                             RecipeCard(
                                 recipe = recipe,
                                 onClick = { onRecipeClick(recipe) },
                                 modifier = Modifier.width(200.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Mensaje cuando no hay recetas
+            if (recipes.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = null,
+                                modifier = Modifier.size(64.dp),
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "No recipes yet",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                            )
+                            Text(
+                                text = "Add your first recipe to get started!",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                             )
                         }
                     }
@@ -352,7 +377,7 @@ fun HomeScreen(
                 )
             }
 
-            items(filteredRecipes) { recipe ->
+            items(filteredRecipes, key = { it.id }) { recipe ->
                 RecipeCard(
                     recipe = recipe,
                     onClick = { onRecipeClick(recipe) }
@@ -390,8 +415,6 @@ fun AddRecipeScreen(
     var category by remember { mutableStateOf("") }
     var ingredients by remember { mutableStateOf("") }
     var steps by remember { mutableStateOf("") }
-    var prepTime by remember { mutableStateOf("") }
-    var servings by remember { mutableStateOf("") }
 
     val categories = listOf("Breakfast", "Lunch", "Dinner", "Dessert", "Snack", "Beverage")
     var expandedCategory by remember { mutableStateOf(false) }
@@ -445,30 +468,6 @@ fun AddRecipeScreen(
         }
 
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(
-                    value = prepTime,
-                    onValueChange = { prepTime = it },
-                    label = { Text("Prep Time") },
-                    placeholder = { Text("30 min") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true
-                )
-                OutlinedTextField(
-                    value = servings,
-                    onValueChange = { servings = it },
-                    label = { Text("Servings") },
-                    placeholder = { Text("4") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true
-                )
-            }
-        }
-
-        item {
             OutlinedTextField(
                 value = ingredients,
                 onValueChange = { ingredients = it },
@@ -514,9 +513,7 @@ fun AddRecipeScreen(
                                 title = title.trim(),
                                 category = category,
                                 ingredients = ingredients.split("\n").filter { it.isNotBlank() },
-                                steps = steps.split("\n").filter { it.isNotBlank() },
-                                prepTime = prepTime.ifBlank { "Not specified" },
-                                servings = servings.ifBlank { "Not specified" }
+                                steps = steps.split("\n").filter { it.isNotBlank() }
                             )
                             onRecipeAdded(recipe)
                         }
@@ -669,8 +666,6 @@ fun RecipeDetailScreen(
     var editCategory by remember { mutableStateOf(recipe.category) }
     var editIngredients by remember { mutableStateOf(recipe.ingredients.joinToString("\n")) }
     var editSteps by remember { mutableStateOf(recipe.steps.joinToString("\n")) }
-    var editPrepTime by remember { mutableStateOf(recipe.prepTime) }
-    var editServings by remember { mutableStateOf(recipe.servings) }
 
     LazyColumn(
         modifier = Modifier
@@ -720,14 +715,6 @@ fun RecipeDetailScreen(
                             horizontalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             Badge { Text(recipe.category) }
-                            Text(
-                                text = "Prep: ${recipe.prepTime}",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Text(
-                                text = "Serves: ${recipe.servings}",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))
@@ -815,26 +802,6 @@ fun RecipeDetailScreen(
             }
 
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = editPrepTime,
-                        onValueChange = { editPrepTime = it },
-                        label = { Text("Prep Time") },
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = editServings,
-                        onValueChange = { editServings = it },
-                        label = { Text("Servings") },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-
-            item {
                 OutlinedTextField(
                     value = editIngredients,
                     onValueChange = { editIngredients = it },
@@ -871,8 +838,6 @@ fun RecipeDetailScreen(
                             editCategory = recipe.category
                             editIngredients = recipe.ingredients.joinToString("\n")
                             editSteps = recipe.steps.joinToString("\n")
-                            editPrepTime = recipe.prepTime
-                            editServings = recipe.servings
                         },
                         modifier = Modifier.weight(1f)
                     ) {
@@ -886,8 +851,6 @@ fun RecipeDetailScreen(
                                 category = editCategory,
                                 ingredients = editIngredients.split("\n").filter { it.isNotBlank() },
                                 steps = editSteps.split("\n").filter { it.isNotBlank() },
-                                prepTime = editPrepTime,
-                                servings = editServings
                             )
                             onEditRecipe(updatedRecipe)
                             isEditing = false
@@ -981,41 +944,6 @@ fun RecipeCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.Add,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = recipe.prepTime,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                    )
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.Person,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = recipe.servings,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                    )
-                }
-            }
-
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
@@ -1024,102 +952,5 @@ fun RecipeCard(
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
         }
-    }
-}
-
-// Función para cargar recetas desde archivo
-fun loadRecipes(file: File): List<Recipe> {
-    return try {
-        if (file.exists()) {
-            val json = file.readText()
-            Json.decodeFromString<List<Recipe>>(json)
-        } else {
-            // Recetas de ejemplo
-            listOf(
-                Recipe(
-                    title = "Spaghetti Carbonara",
-                    category = "Dinner",
-                    ingredients = listOf(
-                        "400g spaghetti",
-                        "200g pancetta or bacon",
-                        "4 large eggs",
-                        "100g Parmesan cheese, grated",
-                        "2 cloves garlic",
-                        "Salt and black pepper",
-                        "Fresh parsley"
-                    ),
-                    steps = listOf(
-                        "Cook spaghetti according to package instructions until al dente",
-                        "In a large pan, cook pancetta until crispy",
-                        "Beat eggs with Parmesan cheese, salt, and pepper",
-                        "Drain pasta, reserving 1 cup pasta water",
-                        "Add hot pasta to the pan with pancetta",
-                        "Remove from heat and quickly stir in egg mixture",
-                        "Add pasta water gradually until creamy",
-                        "Garnish with parsley and serve immediately"
-                    ),
-                    prepTime = "20 minutes",
-                    servings = "4",
-                    isFavorite = true
-                ),
-                Recipe(
-                    title = "Chocolate Chip Cookies",
-                    category = "Dessert",
-                    ingredients = listOf(
-                        "2¼ cups all-purpose flour",
-                        "1 tsp baking soda",
-                        "1 tsp salt",
-                        "1 cup butter, softened",
-                        "¾ cup granulated sugar",
-                        "¾ cup brown sugar",
-                        "2 large eggs",
-                        "2 tsp vanilla extract",
-                        "2 cups chocolate chips"
-                    ),
-                    steps = listOf(
-                        "Preheat oven to 375°F (190°C)",
-                        "Mix flour, baking soda, and salt in a bowl",
-                        "Cream butter and sugars until fluffy",
-                        "Beat in eggs and vanilla",
-                        "Gradually blend in flour mixture",
-                        "Stir in chocolate chips",
-                        "Drop rounded tablespoons onto ungreased cookie sheets",
-                        "Bake for 9-11 minutes until golden brown",
-                        "Cool on baking sheet for 2 minutes before removing"
-                    ),
-                    prepTime = "15 minutes",
-                    servings = "36 cookies"
-                ),
-                Recipe(
-                    title = "Greek Salad",
-                    category = "Lunch",
-                    ingredients = listOf(
-                        "2 large cucumbers, diced",
-                        "4 tomatoes, cut into wedges",
-                        "1 red onion, thinly sliced",
-                        "200g feta cheese, cubed",
-                        "½ cup Kalamata olives",
-                        "¼ cup olive oil",
-                        "2 tbsp red wine vinegar",
-                        "1 tsp dried oregano",
-                        "Salt and pepper to taste"
-                    ),
-                    steps = listOf(
-                        "Combine cucumbers, tomatoes, and red onion in a large bowl",
-                        "Add feta cheese and olives",
-                        "Whisk together olive oil, vinegar, and oregano",
-                        "Pour dressing over salad and toss gently",
-                        "Season with salt and pepper",
-                        "Let sit for 10 minutes before serving"
-                    ),
-                    prepTime = "15 minutes",
-                    servings = "4",
-                    isFavorite = true
-                )
-            )
-        }
-    } catch (e: Exception) {
-        e.printStackTrace()
-        emptyList()
     }
 }
