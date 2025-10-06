@@ -622,6 +622,7 @@ fun RecipeBookApp(
                             currentRoute == "favorites" -> "Favorites"
                             currentRoute.startsWith("detail") -> "Recipe Detail"
                             currentRoute.startsWith("duplicate") -> "Duplicate Recipe"
+                            currentRoute == "info" -> "Project Information"
                             else -> "Recipe Book"
                         }
                     )
@@ -689,6 +690,16 @@ fun RecipeBookApp(
                     selected = currentRoute == "favorites",
                     onClick = {
                         navController.navigate("favorites") {
+                            launchSingleTop = true
+                        }
+                    }
+                )
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.Info, contentDescription = null) },
+                    label = { Text("Info") },
+                    selected = currentRoute == "info",
+                    onClick = {
+                        navController.navigate("info") {
                             launchSingleTop = true
                         }
                     }
@@ -817,6 +828,10 @@ fun RecipeBookApp(
                         Text("Recipe not found")
                     }
                 }
+            }
+
+            composable("info") {
+                ProjectInfoScreen()
             }
         }
     }
@@ -1888,6 +1903,75 @@ fun RecipeCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
+            }
+        }
+    }
+}
+
+@Composable
+fun ProjectInfoScreen() {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Description",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Academic project for Mobile Applications Development - Recipe Manager",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                    )
+                }
+            }
+        }
+
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Team Members",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val teamMembers = listOf(
+                        "Jesús Alejandro Aguilar Hernández",
+                        "Jose Guadalupe Cornejo Alva",
+                        "Yahir Alejandro Roque Martínez",
+                        "Diego Eduardo Zapata Aguilar"
+                    )
+
+                    teamMembers.forEach { member ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Person,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = member,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
             }
         }
     }
