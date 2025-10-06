@@ -4,11 +4,13 @@ import upv_dap.sep_dic_25.itiid_76129.pgu1_eq02.ui.theme.Z_U1_76129_E_02Theme
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
+import android.content.Intent
+import android.content.Context
+import androidx.core.content.FileProvider
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -41,8 +43,19 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import coil.compose.rememberAsyncImagePainter
 import coil.request.ImageRequest
+import java.io.File
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.FileInputStream
+import java.io.FileOutputStream
 
 data class Recipe(
     val id: String = UUID.randomUUID().toString(),
@@ -59,6 +72,205 @@ class MainActivity : ComponentActivity() {
 
     private val selectedImageUri = mutableStateOf<Uri?>(null)
 
+    // State lifted to Activity so we can export/import from outside the composable
+    private val recipesState = mutableStateOf<List<Recipe>>(emptyList())
+    // Pending imported recipes waiting for user confirmation (replace/merge)
+    private val pendingImportRecipes = mutableStateOf<List<Recipe>?>(null)
+    // Message to show after export (Snackbar)
+    private val exportResultMessage = mutableStateOf<String?>(null)
+
+    // Moshi for JSON (use DTOs for stable serialization)
+    private val moshi: Moshi by lazy {
+        Moshi.Builder()
+            .add(KotlinJsonAdapterFactory())
+            .build()
+    }
+
+    // DTO used for serialization (imageUri represented as String, may contain "zip:images/..." prefix)
+    @Suppress("DataClassPrivateConstructor")
+    data class RecipeDto(
+        val id: String,
+        val title: String,
+        val category: String,
+        val ingredients: List<String>,
+        val steps: List<String>,
+        val imageUri: String?,
+        val dateCreated: String,
+        val isFavorite: Boolean
+    )
+
+    private fun Recipe.toDto(imageUriStr: String? = this.imageUri?.toString()): RecipeDto {
+        return RecipeDto(
+            id = this.id,
+            title = this.title,
+            category = this.category,
+            ingredients = this.ingredients,
+            steps = this.steps,
+            imageUri = imageUriStr,
+            dateCreated = this.dateCreated,
+            isFavorite = this.isFavorite
+        )
+    }
+
+    private fun RecipeDto.toRecipe(imageUriResolver: (String?) -> Uri?): Recipe {
+        val uri = imageUriResolver(this.imageUri)
+        return Recipe(
+            id = this.id,
+            title = this.title,
+            category = this.category,
+            ingredients = this.ingredients,
+            steps = this.steps,
+            imageUri = uri,
+            dateCreated = this.dateCreated,
+            isFavorite = this.isFavorite
+        )
+    }
+
+    private fun recipesToJsonString(list: List<Recipe>): String {
+        val dtoList = list.map { it.toDto() }
+        val type = Types.newParameterizedType(List::class.java, RecipeDto::class.java)
+        val adapter = moshi.adapter<List<RecipeDto>>(type)
+        return adapter.toJson(dtoList)
+    }
+
+    private fun recipeToJsonString(recipe: Recipe): String {
+        val adapter = moshi.adapter(RecipeDto::class.java)
+        return adapter.toJson(recipe.toDto())
+    }
+
+    private fun jsonStringToRecipes(text: String): List<Recipe> {
+        if (text.isBlank()) return emptyList()
+        val type = Types.newParameterizedType(List::class.java, RecipeDto::class.java)
+        val adapter = moshi.adapter<List<RecipeDto>>(type)
+        val dtoList = try { adapter.fromJson(text) } catch (_: Exception) { null }
+        if (dtoList == null) return emptyList()
+        return dtoList.map { dto -> dto.toRecipe { uriStr -> if (uriStr.isNullOrBlank()) null else Uri.parse(uriStr) } }
+    }
+
+    private fun saveRecipesToInternal() {
+        try {
+            val file = File(filesDir, "recipes.json")
+            file.writeText(recipesToJsonString(recipesState.value), Charsets.UTF_8)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun loadRecipesFromInternal(): List<Recipe> {
+        return try {
+            val file = File(filesDir, "recipes.json")
+            if (!file.exists()) return emptyList()
+            val text = file.readText(Charsets.UTF_8)
+            jsonStringToRecipes(text)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Load failed: ${e.message}", Toast.LENGTH_LONG).show()
+            emptyList()
+        }
+    }
+
+    private fun cleanOldShareFiles() {
+        try {
+            val files = cacheDir.listFiles() ?: return
+            files.filter { it.name.startsWith("recipe_") && it.name.endsWith(".json") }.forEach { it.delete() }
+        } catch (_: Exception) { /* ignore */ }
+    }
+
+    // Copy an image Uri (content:// or other) to internal filesDir/images/<recipeId>.<ext>
+    private fun copyImageToInternal(imageUri: Uri, recipeId: String): Uri? {
+        return try {
+            val resolver = applicationContext.contentResolver
+            resolver.openInputStream(imageUri)?.use { input ->
+                var ext = "jpg"
+                try {
+                    val type = resolver.getType(imageUri)
+                    if (type != null) {
+                        val dot = type.substringAfterLast('/').takeIf { it.isNotEmpty() }
+                        if (dot != null) ext = dot
+                    }
+                } catch (_: Exception) {}
+
+                val imagesDir = File(filesDir, "images")
+                if (!imagesDir.exists()) imagesDir.mkdirs()
+                val target = File(imagesDir, "$recipeId.$ext")
+                FileOutputStream(target).use { out ->
+                    val buf = ByteArray(8192)
+                    var len: Int
+                    while (true) {
+                        len = input.read(buf)
+                        if (len <= 0) break
+                        out.write(buf, 0, len)
+                    }
+                    out.flush()
+                }
+                Uri.fromFile(target)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun addRecipeInternal(r: Recipe) {
+        var recipeToAdd = r
+        try {
+            if (r.imageUri != null) {
+                val isInternal = (r.imageUri.scheme == "file" && r.imageUri.path?.startsWith(File(filesDir, "images").absolutePath) == true)
+                if (!isInternal) {
+                    val newUri = copyImageToInternal(r.imageUri, r.id)
+                    if (newUri != null) recipeToAdd = r.copy(imageUri = newUri)
+                }
+            }
+        } catch (_: Exception) { /* ignore */ }
+
+        recipesState.value = recipesState.value + recipeToAdd
+        saveRecipesToInternal()
+    }
+
+    private fun updateRecipeInternal(updated: Recipe) {
+        var updatedRecipe = updated
+        val existing = recipesState.value.find { it.id == updated.id }
+        if (existing != null) {
+            try {
+                // If image changed and new one is external, copy it
+                if (updated.imageUri != null && updated.imageUri != existing.imageUri) {
+                    val isInternal = (updated.imageUri.scheme == "file" && updated.imageUri.path?.startsWith(File(filesDir, "images").absolutePath) == true)
+                    if (!isInternal) {
+                        val newUri = copyImageToInternal(updated.imageUri, updated.id)
+                        if (newUri != null) {
+                            // remove old internal file if any
+                            existing.imageUri?.let { old ->
+                                try {
+                                    if (old.scheme == "file") {
+                                        val oldFile = File(old.path ?: "")
+                                        if (oldFile.exists() && oldFile.parentFile?.name == "images") oldFile.delete()
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                            updatedRecipe = updated.copy(imageUri = newUri)
+                        }
+                    }
+                } else if (updated.imageUri == null && existing.imageUri != null) {
+                    // image removed: delete old internal file if present
+                    existing.imageUri?.let { old ->
+                        try {
+                            if (old.scheme == "file") {
+                                val oldFile = File(old.path ?: "")
+                                if (oldFile.exists() && oldFile.parentFile?.name == "images") oldFile.delete()
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        recipesState.value = recipesState.value.map { if (it.id == updatedRecipe.id) updatedRecipe else it }
+        saveRecipesToInternal()
+    }
+
+    private fun deleteRecipeInternal(id: String) {
+        recipesState.value = recipesState.value.filterNot { it.id == id }
+        saveRecipesToInternal()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -70,16 +282,302 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Launcher to create a file (export backup as ZIP)
+        val exportLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri: Uri? ->
+            if (uri == null) {
+                Toast.makeText(this, "Export canceled", Toast.LENGTH_SHORT).show()
+            } else {
+                exportRecipesToZipUri(this, uri, recipesState.value)
+            }
+        }
+
+        // Launcher to open a JSON file (import/restore)
+        val importLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+            if (uri == null) {
+                Toast.makeText(this, "Import canceled", Toast.LENGTH_SHORT).show()
+            } else {
+                importRecipesFromUri(this, uri) { imported ->
+                    // Don't immediately replace: store pending and ask user via dialog in Compose
+                    pendingImportRecipes.value = imported
+                }
+            }
+        }
+
+        // Load persisted recipes before showing UI
+        recipesState.value = loadRecipesFromInternal()
+        // Clean temp share files
+        cleanOldShareFiles()
+
         setContent {
             Z_U1_76129_E_02Theme {
                 RecipeBookApp(
                     selectedImageUri = selectedImageUri.value,
                     onImageSelect = { imagePickerLauncher.launch("image/*") },
-                    onImageClear = { selectedImageUri.value = null }
+                    onImageClear = { selectedImageUri.value = null },
+                    recipes = recipesState.value,
+                    onAddRecipe = { r -> addRecipeInternal(r) },
+                    onUpdateRecipe = { updated -> updateRecipeInternal(updated) },
+                    onDeleteRecipe = { id -> deleteRecipeInternal(id) },
+                    onExport = { exportLauncher.launch("recipes_backup.json") },
+                    onImport = { importLauncher.launch(arrayOf("application/json", "text/json", "application/*+json", "*/*")) },
+                    onShareRecipe = { recipe -> shareRecipe(this, recipe) },
+                    // Import confirmation handlers
+                    showImportDialog = pendingImportRecipes.value != null,
+                    pendingImportCount = pendingImportRecipes.value?.size ?: 0,
+                    onConfirmImportReplace = {
+                        recipesState.value = pendingImportRecipes.value ?: emptyList()
+                        pendingImportRecipes.value = null
+                        Toast.makeText(this, "Import applied (replace)", Toast.LENGTH_SHORT).show()
+                    },
+                    onConfirmImportMerge = {
+                        val toImport = pendingImportRecipes.value ?: emptyList()
+                        val existing = recipesState.value.toMutableList()
+                        val existingIds = existing.map { it.id }.toMutableSet()
+                        // compute how many will be added
+                        val willAdd = toImport.count { !existingIds.contains(it.id) }
+                        toImport.forEach { r -> if (!existingIds.contains(r.id)) { existing.add(r); existingIds.add(r.id) } }
+                        recipesState.value = existing
+                        pendingImportRecipes.value = null
+                        Toast.makeText(this, "Import merged: added $willAdd recipes", Toast.LENGTH_SHORT).show()
+                    },
+                    onCancelImport = {
+                        pendingImportRecipes.value = null
+                        Toast.makeText(this, "Import canceled", Toast.LENGTH_SHORT).show()
+                    }
+                    ,
+                    exportResultMessage = exportResultMessage.value,
+                    onClearExportMessage = { exportResultMessage.value = null }
                 )
             }
         }
     }
+
+    override fun onPause() {
+        super.onPause()
+        // Ensure recipes persisted when app is backgrounded
+        try {
+            saveRecipesToInternal()
+        } catch (_: Exception) { }
+    }
+
+    // --- Export helpers (ZIP with images) ---
+    private fun exportRecipesToZipUri(context: Context, uri: Uri, recipes: List<Recipe>) {
+        // create temp zip file in cache
+        try {
+            val tmpZip = File.createTempFile("recipes_backup", ".zip", cacheDir)
+            ZipOutputStream(BufferedOutputStream(FileOutputStream(tmpZip))).use { zos ->
+                // build DTO list and include images inside zip under images/<filename>
+                val dtoList = mutableListOf<RecipeDto>()
+                recipes.forEach { recipe ->
+                    var dtoImageUriStr: String? = null
+                    if (recipe.imageUri != null) {
+                        try {
+                            val resolver = context.contentResolver
+                            resolver.openInputStream(recipe.imageUri)?.use { input ->
+                                // determine extension if possible
+                                var ext = "jpg"
+                                try {
+                                    val type = resolver.getType(recipe.imageUri)
+                                    if (type != null) {
+                                        val dot = type.substringAfterLast('/').takeIf { it.isNotEmpty() }
+                                        if (dot != null) ext = dot
+                                    }
+                                } catch (_: Exception) {}
+
+                                val imageName = "${recipe.id}.$ext"
+                                val entryName = "images/$imageName"
+                                zos.putNextEntry(ZipEntry(entryName))
+                                val buf = ByteArray(8192)
+                                var len: Int
+                                BufferedInputStream(input).use { bin ->
+                                    while (true) {
+                                        len = bin.read(buf)
+                                        if (len <= 0) break
+                                        zos.write(buf, 0, len)
+                                    }
+                                }
+                                zos.closeEntry()
+                                dtoImageUriStr = "zip:$entryName"
+                            }
+                        } catch (_: Exception) {
+                            dtoImageUriStr = null
+                        }
+                    }
+
+                    dtoList.add(recipe.toDto(dtoImageUriStr))
+                }
+
+                // write recipes.json entry using Moshi
+                val type = Types.newParameterizedType(List::class.java, RecipeDto::class.java)
+                val adapter = moshi.adapter<List<RecipeDto>>(type)
+                zos.putNextEntry(ZipEntry("recipes.json"))
+                val jsonBytes = adapter.toJson(dtoList).toByteArray(Charsets.UTF_8)
+                zos.write(jsonBytes)
+                zos.closeEntry()
+            }
+
+            // copy tmpZip to destination uri
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                FileInputStream(tmpZip).use { fis ->
+                    val buf = ByteArray(8192)
+                    var len: Int
+                    while (true) {
+                        len = fis.read(buf)
+                        if (len <= 0) break
+                        out.write(buf, 0, len)
+                    }
+                    out.flush()
+                }
+            }
+
+            tmpZip.delete()
+            val msg = "Export (zip) successful"
+            exportResultMessage.value = msg
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            val err = "Export failed: ${e.message}"
+            exportResultMessage.value = err
+            Toast.makeText(this, err, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun importRecipesFromUri(context: Context, uri: Uri, callback: (List<Recipe>) -> Unit) {
+        try {
+            // Try to open as ZIP first
+            val input = context.contentResolver.openInputStream(uri) ?: run {
+                Toast.makeText(this, "Import failed: cannot open file", Toast.LENGTH_LONG).show()
+                return
+            }
+
+            var parsedRecipes: List<Recipe>? = null
+
+            try {
+                val imagesMap = mutableMapOf<String, File>()
+                val zis = ZipInputStream(BufferedInputStream(input))
+                var entry: ZipEntry? = zis.nextEntry
+                var recipesJsonText: String? = null
+                while (entry != null) {
+                    val name = entry.name
+                    if (entry.isDirectory) {
+                        zis.closeEntry()
+                        entry = zis.nextEntry
+                        continue
+                    }
+
+                    if (name == "recipes.json") {
+                        // read text
+                        val baos = java.io.ByteArrayOutputStream()
+                        val buf = ByteArray(8192)
+                        var r: Int
+                        while (true) {
+                            r = zis.read(buf)
+                            if (r <= 0) break
+                            baos.write(buf, 0, r)
+                        }
+                        recipesJsonText = baos.toString(Charsets.UTF_8.name())
+                        zis.closeEntry()
+                    } else if (name.startsWith("images/")) {
+                        // extract image to internal filesDir/images/
+                        val imagesDir = File(filesDir, "images")
+                        if (!imagesDir.exists()) imagesDir.mkdirs()
+                        val target = File(imagesDir, name.substringAfterLast('/'))
+                        BufferedOutputStream(FileOutputStream(target)).use { out ->
+                            val buf = ByteArray(8192)
+                            var r: Int
+                            while (true) {
+                                r = zis.read(buf)
+                                if (r <= 0) break
+                                out.write(buf, 0, r)
+                            }
+                            out.flush()
+                        }
+                        imagesMap[name] = target
+                        zis.closeEntry()
+                    } else {
+                        // unknown entry, skip
+                        zis.closeEntry()
+                    }
+
+                    entry = zis.nextEntry
+                }
+                zis.close()
+
+                if (recipesJsonText != null) {
+                    // parse using Moshi DTOs and resolve image URIs
+                    val type = Types.newParameterizedType(List::class.java, RecipeDto::class.java)
+                    val adapter = moshi.adapter<List<RecipeDto>>(type)
+                    val dtoList = try { adapter.fromJson(recipesJsonText) } catch (_: Exception) { null }
+                    if (dtoList != null) {
+                        val list = mutableListOf<Recipe>()
+                        dtoList.forEach { dto ->
+                            val imageUriStr = dto.imageUri
+                            val imageUri: Uri? = when {
+                                imageUriStr == null -> null
+                                imageUriStr.startsWith("zip:images/") -> {
+                                    val entryName = imageUriStr.removePrefix("zip:")
+                                    val saved = imagesMap[entryName]
+                                    if (saved != null && saved.exists()) Uri.fromFile(saved) else null
+                                }
+                                imageUriStr.isNotBlank() -> Uri.parse(imageUriStr)
+                                else -> null
+                            }
+
+                            val recipe = Recipe(
+                                id = dto.id.ifBlank { UUID.randomUUID().toString() },
+                                title = dto.title.ifBlank { "Untitled" },
+                                category = dto.category,
+                                ingredients = dto.ingredients ?: emptyList(),
+                                steps = dto.steps ?: emptyList(),
+                                imageUri = imageUri,
+                                dateCreated = dto.dateCreated.ifBlank { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) },
+                                isFavorite = dto.isFavorite
+                            )
+                            list.add(recipe)
+                        }
+                        parsedRecipes = list
+                    }
+                }
+            } catch (zipEx: Exception) {
+                // Not a zip or zip processing failed: fallback to plain JSON
+                input.close()
+                val text = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                parsedRecipes = jsonStringToRecipes(text)
+            }
+
+            if (parsedRecipes != null) callback(parsedRecipes) else callback(emptyList())
+
+        } catch (e: Exception) {
+            Toast.makeText(this, "Import failed: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun shareRecipe(context: Context, recipe: Recipe) {
+        try {
+            // Write single recipe JSON to cache
+            val filename = "recipe_${recipe.id}.json"
+            val cacheFile = File(context.cacheDir, filename)
+            // remove old file if exists
+            if (cacheFile.exists()) cacheFile.delete()
+            cacheFile.outputStream().use { out ->
+                out.write(recipeToJsonString(recipe).toByteArray(Charsets.UTF_8))
+                out.flush()
+            }
+
+            val authority = "${context.packageName}.fileprovider"
+            val uri = FileProvider.getUriForFile(context, authority, cacheFile)
+
+            val share = Intent(Intent.ACTION_SEND).apply {
+                type = "application/json"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            startActivity(Intent.createChooser(share, "Share recipe"))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Share failed: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -87,12 +585,27 @@ class MainActivity : ComponentActivity() {
 fun RecipeBookApp(
     selectedImageUri: Uri?,
     onImageSelect: () -> Unit,
-    onImageClear: () -> Unit
+    onImageClear: () -> Unit,
+    recipes: List<Recipe>,
+    onAddRecipe: (Recipe) -> Unit,
+    onUpdateRecipe: (Recipe) -> Unit,
+    onDeleteRecipe: (String) -> Unit,
+    onExport: () -> Unit,
+    onImport: () -> Unit,
+    onShareRecipe: (Recipe) -> Unit,
+    exportResultMessage: String? = null,
+    onClearExportMessage: () -> Unit = {}
+    ,
+    // import confirmation UI wiring
+    showImportDialog: Boolean = false,
+    pendingImportCount: Int = 0,
+    onConfirmImportReplace: () -> Unit = {},
+    onConfirmImportMerge: () -> Unit = {},
+    onCancelImport: () -> Unit = {}
 ) {
     val navController = rememberNavController()
 
-    // Estado simple para las recetas - empezamos con lista vacía
-    var recipes by remember { mutableStateOf(emptyList<Recipe>()) }
+    // 'recipes' proviene del Activity; no lo redeclaramos aquí.
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: "home"
@@ -111,6 +624,14 @@ fun RecipeBookApp(
                             else -> "Recipe Book"
                         }
                     )
+                },
+                actions = {
+                    TextButton(onClick = { onImport() }) {
+                        Text("Import", color = MaterialTheme.colorScheme.onPrimary)
+                    }
+                    TextButton(onClick = { onExport() }) {
+                        Text("Export", color = MaterialTheme.colorScheme.onPrimary)
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
@@ -174,6 +695,13 @@ fun RecipeBookApp(
             }
         }
     ) { innerPadding ->
+        val snackbarHostState = remember { SnackbarHostState() }
+        LaunchedEffect(exportResultMessage) {
+            exportResultMessage?.let { msg ->
+                snackbarHostState.showSnackbar(msg)
+                onClearExportMessage()
+            }
+        }
         NavHost(
             navController = navController,
             startDestination = "home",
@@ -194,7 +722,7 @@ fun RecipeBookApp(
                     onImageSelect = onImageSelect,
                     onImageClear = onImageClear,
                     onRecipeAdded = { recipe ->
-                        recipes = recipes + recipe
+                        onAddRecipe(recipe)
                         onImageClear() // Limpiar imagen después de agregar
                         navController.navigateUp()
                     },
@@ -234,21 +762,18 @@ fun RecipeBookApp(
                         onImageSelect = onImageSelect,
                         onImageClear = onImageClear,
                         onToggleFavorite = { updatedRecipe ->
-                            recipes = recipes.map {
-                                if (it.id == updatedRecipe.id) updatedRecipe else it
-                            }
+                            onUpdateRecipe(updatedRecipe)
                         },
                         onDeleteRecipe = {
-                            recipes = recipes.filter { it.id != recipe.id }
+                            onDeleteRecipe(recipe.id)
                             onImageClear() // Limpiar imagen al eliminar
                             navController.navigateUp()
                         },
                         onEditRecipe = { updatedRecipe ->
-                            recipes = recipes.map {
-                                if (it.id == updatedRecipe.id) updatedRecipe else it
-                            }
+                            onUpdateRecipe(updatedRecipe)
                             onImageClear() // Limpiar imagen después de editar
-                        }
+                        },
+                        onShareRecipe = { r -> onShareRecipe(r) }
                     )
                 } else {
                     Box(
@@ -260,6 +785,29 @@ fun RecipeBookApp(
                 }
             }
         }
+    }
+    // place the SnackbarHost so it's visible above everything
+    if (exportResultMessage != null) {
+        // handled in LaunchedEffect above
+    }
+
+    // Import confirmation dialog
+    if (showImportDialog) {
+        AlertDialog(
+            onDismissRequest = { onCancelImport() },
+            title = { Text("Restore recipes") },
+            text = { Text("Detected $pendingImportCount recipes in the selected file. Do you want to replace your current recipes or merge (add non-duplicates)?") },
+            confirmButton = {
+                Button(onClick = { onConfirmImportReplace() }) { Text("Replace") }
+            },
+            dismissButton = {
+                Row {
+                    OutlinedButton(onClick = { onConfirmImportMerge() }) { Text("Merge") }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    OutlinedButton(onClick = { onCancelImport() }) { Text("Cancel") }
+                }
+            }
+        )
     }
 }
 
@@ -819,7 +1367,8 @@ fun RecipeDetailScreen(
     onImageClear: () -> Unit,
     onToggleFavorite: (Recipe) -> Unit,
     onDeleteRecipe: () -> Unit,
-    onEditRecipe: (Recipe) -> Unit
+    onEditRecipe: (Recipe) -> Unit,
+    onShareRecipe: (Recipe) -> Unit
 ) {
     var isEditing by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -864,6 +1413,10 @@ fun RecipeDetailScreen(
 
                 IconButton(onClick = { isEditing = !isEditing }) {
                     Icon(Icons.Default.Edit, contentDescription = "Edit")
+                }
+
+                IconButton(onClick = { onShareRecipe(recipe) }) {
+                    Icon(Icons.Default.Share, contentDescription = "Share")
                 }
 
                 IconButton(onClick = { showDeleteDialog = true }) {
@@ -1313,4 +1866,3 @@ fun RecipeCard(
         }
     }
 }
-
