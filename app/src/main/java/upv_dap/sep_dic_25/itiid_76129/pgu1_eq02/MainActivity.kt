@@ -621,6 +621,7 @@ fun RecipeBookApp(
                             currentRoute == "recipes" -> "All Recipes"
                             currentRoute == "favorites" -> "Favorites"
                             currentRoute.startsWith("detail") -> "Recipe Detail"
+                            currentRoute.startsWith("duplicate") -> "Duplicate Recipe"
                             else -> "Recipe Book"
                         }
                     )
@@ -733,6 +734,36 @@ fun RecipeBookApp(
                 )
             }
 
+            composable("duplicate/{recipeId}") { backStackEntry ->
+                val recipeId = backStackEntry.arguments?.getString("recipeId")
+                val originalRecipe = recipes.find { it.id == recipeId }
+
+                if (originalRecipe != null) {
+                    AddRecipeScreen(
+                        selectedImageUri = selectedImageUri,
+                        onImageSelect = onImageSelect,
+                        onImageClear = onImageClear,
+                        onRecipeAdded = { recipe ->
+                            onAddRecipe(recipe)
+                            onImageClear() // Limpiar imagen después de agregar
+                            navController.navigateUp()
+                        },
+                        onCancel = {
+                            onImageClear() // Limpiar imagen al cancelar
+                            navController.navigateUp()
+                        },
+                        duplicateFrom = originalRecipe
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("Original recipe not found")
+                    }
+                }
+            }
+
             composable("recipes") {
                 RecipeListScreen(
                     recipes = recipes,
@@ -773,7 +804,10 @@ fun RecipeBookApp(
                             onUpdateRecipe(updatedRecipe)
                             onImageClear() // Limpiar imagen después de editar
                         },
-                        onShareRecipe = { r -> onShareRecipe(r) }
+                        onShareRecipe = { r -> onShareRecipe(r) },
+                        onDuplicateRecipe = { r ->
+                            navController.navigate("duplicate/${r.id}")
+                        }
                     )
                 } else {
                     Box(
@@ -1008,15 +1042,24 @@ fun AddRecipeScreen(
     onImageSelect: () -> Unit,
     onImageClear: () -> Unit,
     onRecipeAdded: (Recipe) -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    duplicateFrom: Recipe? = null
 ) {
-    var title by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf("") }
-    var ingredients by remember { mutableStateOf("") }
-    var steps by remember { mutableStateOf("") }
+    var title by remember { mutableStateOf(duplicateFrom?.let { "${it.title} (Copy)" } ?: "") }
+    var category by remember { mutableStateOf(duplicateFrom?.category ?: "") }
+    var ingredients by remember { mutableStateOf(duplicateFrom?.ingredients?.joinToString("\n") ?: "") }
+    var steps by remember { mutableStateOf(duplicateFrom?.steps?.joinToString("\n") ?: "") }
 
     val categories = listOf("Breakfast", "Lunch", "Dinner", "Dessert", "Snack", "Beverage")
     var expandedCategory by remember { mutableStateOf(false) }
+
+    // Efecto para cargar la imagen original al duplicar (si existe)
+    LaunchedEffect(duplicateFrom) {
+        if (duplicateFrom?.imageUri != null && selectedImageUri == null) {
+            // En caso de duplicar, la imagen original se mantendrá referenciada
+            // pero no se pre-selecciona automáticamente para evitar conflictos
+        }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -1220,7 +1263,7 @@ fun AddRecipeScreen(
                                 category = category,
                                 ingredients = ingredients.split("\n").filter { it.isNotBlank() },
                                 steps = steps.split("\n").filter { it.isNotBlank() },
-                                imageUri = selectedImageUri
+                                imageUri = selectedImageUri ?: duplicateFrom?.imageUri
                             )
                             onRecipeAdded(recipe)
                         }
@@ -1229,7 +1272,7 @@ fun AddRecipeScreen(
                             ingredients.isNotBlank() && steps.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Save Recipe")
+                    Text(if (duplicateFrom != null) "Duplicate Recipe" else "Save Recipe")
                 }
             }
         }
@@ -1357,7 +1400,6 @@ fun FavoritesScreen(
         }
     }
 }
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecipeDetailScreen(
@@ -1368,7 +1410,8 @@ fun RecipeDetailScreen(
     onToggleFavorite: (Recipe) -> Unit,
     onDeleteRecipe: () -> Unit,
     onEditRecipe: (Recipe) -> Unit,
-    onShareRecipe: (Recipe) -> Unit
+    onShareRecipe: (Recipe) -> Unit,
+    onDuplicateRecipe: (Recipe) -> Unit
 ) {
     var isEditing by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -1378,14 +1421,20 @@ fun RecipeDetailScreen(
     var editIngredients by remember { mutableStateOf(recipe.ingredients.joinToString("\n")) }
     var editSteps by remember { mutableStateOf(recipe.steps.joinToString("\n")) }
 
-    // Estado para manejar si queremos cambiar la imagen durante la edición
-    var editImageUri by remember { mutableStateOf<Uri?>(null) }
-    var hasImageChanged by remember { mutableStateOf(false) }
+    val categories = listOf("Breakfast", "Lunch", "Dinner", "Dessert", "Snack", "Beverage")
+    var expandedCategory by remember { mutableStateOf(false) }
 
-    // Efecto para detectar cambios en selectedImageUri durante la edición
-    LaunchedEffect(selectedImageUri) {
-        if (isEditing && selectedImageUri != null && hasImageChanged) {
+    var editImageUri by remember(recipe.id) { mutableStateOf<Uri?>(recipe.imageUri) }
+
+    LaunchedEffect(selectedImageUri, isEditing) {
+        if (isEditing && selectedImageUri != null) {
             editImageUri = selectedImageUri
+        }
+    }
+
+    LaunchedEffect(isEditing) {
+        if (!isEditing) {
+            editImageUri = recipe.imageUri
         }
     }
 
@@ -1396,7 +1445,6 @@ fun RecipeDetailScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            // Action buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1419,6 +1467,10 @@ fun RecipeDetailScreen(
                     Icon(Icons.Default.Share, contentDescription = "Share")
                 }
 
+                IconButton(onClick = { onDuplicateRecipe(recipe) }) {
+                    Icon(Icons.Default.AddCircle, contentDescription = "Duplicate")
+                }
+
                 IconButton(onClick = { showDeleteDialog = true }) {
                     Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red)
                 }
@@ -1426,9 +1478,6 @@ fun RecipeDetailScreen(
         }
 
         if (!isEditing) {
-            // Display mode
-
-            // Imagen de la receta (si existe)
             if (recipe.imageUri != null) {
                 item {
                     Card(modifier = Modifier.fillMaxWidth()) {
@@ -1459,9 +1508,7 @@ fun RecipeDetailScreen(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             Badge { Text(recipe.category) }
                         }
 
@@ -1486,14 +1533,9 @@ fun RecipeDetailScreen(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         recipe.ingredients.forEach { ingredient ->
-                            Row(
-                                modifier = Modifier.padding(vertical = 2.dp)
-                            ) {
+                            Row(modifier = Modifier.padding(vertical = 2.dp)) {
                                 Text("• ", style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    text = ingredient,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
+                                Text(text = ingredient, style = MaterialTheme.typography.bodyMedium)
                             }
                         }
                     }
@@ -1520,17 +1562,13 @@ fun RecipeDetailScreen(
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.Bold
                                 )
-                                Text(
-                                    text = step,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
+                                Text(text = step, style = MaterialTheme.typography.bodyMedium)
                             }
                         }
                     }
                 }
             }
         } else {
-            // Edit mode
             item {
                 OutlinedTextField(
                     value = editTitle,
@@ -1541,15 +1579,35 @@ fun RecipeDetailScreen(
             }
 
             item {
-                OutlinedTextField(
-                    value = editCategory,
-                    onValueChange = { editCategory = it },
-                    label = { Text("Category") },
-                    modifier = Modifier.fillMaxWidth()
-                )
+                ExposedDropdownMenuBox(
+                    expanded = expandedCategory,
+                    onExpandedChange = { expandedCategory = !expandedCategory }
+                ) {
+                    OutlinedTextField(
+                        value = editCategory,
+                        onValueChange = { },
+                        readOnly = true,
+                        label = { Text("Category") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedCategory) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expandedCategory,
+                        onDismissRequest = { expandedCategory = false }
+                    ) {
+                        categories.forEach { cat ->
+                            DropdownMenuItem(
+                                text = { Text(cat) },
+                                onClick = {
+                                    editCategory = cat
+                                    expandedCategory = false
+                                }
+                            )
+                        }
+                    }
+                }
             }
 
-            // Sección de edición de imagen
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -1569,15 +1627,11 @@ fun RecipeDetailScreen(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // Determinar qué imagen mostrar
-                        val displayImageUri = if (hasImageChanged) selectedImageUri else recipe.imageUri
-
-                        if (displayImageUri != null) {
-                            // Mostrar imagen actual o nueva
+                        if (editImageUri != null) {
                             Image(
                                 painter = rememberAsyncImagePainter(
                                     model = ImageRequest.Builder(LocalContext.current)
-                                        .data(displayImageUri)
+                                        .data(editImageUri)
                                         .crossfade(true)
                                         .build()
                                 ),
@@ -1596,10 +1650,7 @@ fun RecipeDetailScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 OutlinedButton(
-                                    onClick = {
-                                        hasImageChanged = true
-                                        onImageSelect()
-                                    },
+                                    onClick = { onImageSelect() },
                                     modifier = Modifier.weight(1f)
                                 ) {
                                     Icon(Icons.Default.Edit, contentDescription = null)
@@ -1609,7 +1660,6 @@ fun RecipeDetailScreen(
 
                                 OutlinedButton(
                                     onClick = {
-                                        hasImageChanged = true
                                         editImageUri = null
                                         onImageClear()
                                     },
@@ -1624,21 +1674,15 @@ fun RecipeDetailScreen(
                                 }
                             }
                         } else {
-                            // Mostrar área para seleccionar imagen
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(200.dp)
                                     .clip(RoundedCornerShape(12.dp))
-                                    .clickableWithoutRipple {
-                                        hasImageChanged = true
-                                        onImageSelect()
-                                    },
+                                    .clickableWithoutRipple { onImageSelect() },
                                 contentAlignment = Alignment.Center
                             ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Icon(
                                         Icons.Default.Add,
                                         contentDescription = null,
@@ -1657,10 +1701,7 @@ fun RecipeDetailScreen(
                             Spacer(modifier = Modifier.height(8.dp))
 
                             Button(
-                                onClick = {
-                                    hasImageChanged = true
-                                    onImageSelect()
-                                },
+                                onClick = { onImageSelect() },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Icon(Icons.Default.Add, contentDescription = null)
@@ -1677,9 +1718,7 @@ fun RecipeDetailScreen(
                     value = editIngredients,
                     onValueChange = { editIngredients = it },
                     label = { Text("Ingredients") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(120.dp),
+                    modifier = Modifier.fillMaxWidth().height(120.dp),
                     maxLines = 6
                 )
             }
@@ -1689,9 +1728,7 @@ fun RecipeDetailScreen(
                     value = editSteps,
                     onValueChange = { editSteps = it },
                     label = { Text("Instructions") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(150.dp),
+                    modifier = Modifier.fillMaxWidth().height(150.dp),
                     maxLines = 8
                 )
             }
@@ -1704,14 +1741,13 @@ fun RecipeDetailScreen(
                     OutlinedButton(
                         onClick = {
                             isEditing = false
-                            // Reset values
                             editTitle = recipe.title
                             editCategory = recipe.category
                             editIngredients = recipe.ingredients.joinToString("\n")
                             editSteps = recipe.steps.joinToString("\n")
-                            editImageUri = null
-                            hasImageChanged = false
-                            onImageClear() // Limpiar imagen temporal
+                            editImageUri = recipe.imageUri
+                            expandedCategory = false
+                            onImageClear()
                         },
                         modifier = Modifier.weight(1f)
                     ) {
@@ -1720,25 +1756,16 @@ fun RecipeDetailScreen(
 
                     Button(
                         onClick = {
-                            val finalImageUri = if (hasImageChanged) {
-                                selectedImageUri
-                            } else {
-                                recipe.imageUri
-                            }
-
                             val updatedRecipe = recipe.copy(
                                 title = editTitle,
                                 category = editCategory,
                                 ingredients = editIngredients.split("\n").filter { it.isNotBlank() },
                                 steps = editSteps.split("\n").filter { it.isNotBlank() },
-                                imageUri = finalImageUri
+                                imageUri = editImageUri
                             )
                             onEditRecipe(updatedRecipe)
                             isEditing = false
-                            editImageUri = null
-                            hasImageChanged = false
-                            onEditRecipe(updatedRecipe)
-                            isEditing = false
+                            expandedCategory = false
                         },
                         modifier = Modifier.weight(1f)
                     ) {
@@ -1749,7 +1776,6 @@ fun RecipeDetailScreen(
         }
     }
 
-    // Delete confirmation dialog
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
