@@ -219,7 +219,7 @@ class MainActivity : ComponentActivity() {
                     if (newUri != null) recipeToAdd = r.copy(imageUri = newUri)
                 }
             }
-        } catch (_: Exception) { /* ignore */ }
+        } catch (_: Exception) { }
 
         recipesState.value = recipesState.value + recipeToAdd
         saveRecipesToInternal()
@@ -604,9 +604,6 @@ fun RecipeBookApp(
     onCancelImport: () -> Unit = {}
 ) {
     val navController = rememberNavController()
-
-    // 'recipes' proviene del Activity; no lo redeclaramos aquí.
-
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: "home"
 
@@ -835,9 +832,7 @@ fun RecipeBookApp(
             }
         }
     }
-    // place the SnackbarHost so it's visible above everything
     if (exportResultMessage != null) {
-        // handled in LaunchedEffect above
     }
 
     // Import confirmation dialog
@@ -977,7 +972,6 @@ fun HomeScreen(
                 }
             }
 
-            // Mensaje cuando no hay recetas
             if (recipes.isEmpty()) {
                 item {
                     Card(
@@ -1068,11 +1062,8 @@ fun AddRecipeScreen(
     val categories = listOf("Breakfast", "Lunch", "Dinner", "Dessert", "Snack", "Beverage")
     var expandedCategory by remember { mutableStateOf(false) }
 
-    // Efecto para cargar la imagen original al duplicar (si existe)
     LaunchedEffect(duplicateFrom) {
         if (duplicateFrom?.imageUri != null && selectedImageUri == null) {
-            // En caso de duplicar, la imagen original se mantendrá referenciada
-            // pero no se pre-selecciona automáticamente para evitar conflictos
         }
     }
 
@@ -1124,7 +1115,6 @@ fun AddRecipeScreen(
             }
         }
 
-        // Sección de imagen
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1189,7 +1179,6 @@ fun AddRecipeScreen(
                             }
                         }
                     } else {
-                        // Mostrar botón para seleccionar imagen
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1816,7 +1805,6 @@ fun RecipeDetailScreen(
     }
 }
 
-// Función helper para clicks sin ripple
 fun Modifier.clickableWithoutRipple(onClick: () -> Unit): Modifier = composed {
     clickable(
         indication = null,
@@ -1840,7 +1828,6 @@ fun RecipeCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Column {
-            // Imagen de la receta (si existe)
             if (recipe.imageUri != null) {
                 Image(
                     painter = rememberAsyncImagePainter(
