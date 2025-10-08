@@ -1933,7 +1933,7 @@ fun ProjectInfoScreen() {
 
                     val teamMembers = listOf(
                         "Jesús Alejandro Aguilar Hernández",
-                        "Jose Guadalupe Cornejo Alva",
+                        "José Guadalupe Cornejo Alva",
                         "Yahir Alejandro Roque Martínez",
                         "Diego Eduardo Zapata Aguilar"
                     )
